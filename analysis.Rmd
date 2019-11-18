@@ -1,8 +1,8 @@
 ---
 title: "Evaluating dynamic Gröbner Basis algorithms"
 author: "Gabriel Mattos Langeloh"
-date: "10/10/2019"
-output: pdf_document
+date: "18/11/2019"
+output: html_document
 bibliography: biblio.bib
 ---
 
@@ -10,7 +10,10 @@ bibliography: biblio.bib
 knitr::opts_chunk$set(echo = FALSE, eval = TRUE)
 library(tidyverse)
 
-dyn_results <- read.table("basic_data2.out", header=T)
+dyn_results <- read.table("data/tiamat0-results5.out", header=T)
+rand_results <- read.table("data/tiamat0-random.out", header=T)
+ls_results <- read.table("data/tiamat2-ls.out", header=T)
+dyn_results <- rbind(dyn_results, rand_results, ls_results)
 ```
 
 # Introduction
@@ -28,12 +31,14 @@ of the following:
 - sparser polynomials in the output
 - polynomials of lower degree in the output
 
-These are the main values that are computed in the experiments that follow. Four algorithms were used: 
+These are the main values that are computed in the experiments that follow. Six algorithms were used: 
 
 - the static algorithm (with a fixed input ordering, commonly used in the literature)
+- the Gritzmann-Sturmfels algorithm (proposed in [@Gritzmann1993], essentially a brute force search)
 - the caboara-perry algorithm (proposed in [@Caboara2014], uses linear programming)
 - the perturbation algorithm (new, looks for better orderings by applying perturbations to the current one)
 - the random algorithm (new, does a random walk in the space of orderings)
+- the local search algorithm (new, does a local search over the search space)
 
 Due to particular traits of these algorithms, the perturbation and random algorithms only look for new orderings
 every 10 iterations of the Gröbner basis computation. It would also be interesting to find a better period
@@ -44,7 +49,7 @@ more rigorously, but we do not do that here.
 All algorithms were implemented in the Sage computer algebra system (version 8.8, Python version 3.7.3) 
 and share all basic functionality from the underlying algorithm used to compute Gröbner Bases.
 Our implementation is based on that of [@Caboara2014].
-Experiments were run on an Intel(R) Core(TM) i7 CPU 930 @ 2.80GHz machine with 12GB of RAM.
+Experiments were run on an AMD FX(tm)-8150 Eight-Core Processor @ 3.60GHz machine with 32GB of RAM.
 
 All `r length(unique(dyn_results$instance))` instances were extracted from 
 [Christian Eder's benchmark library](https://github.com/ederc/singular-benchmarks) for 
@@ -62,10 +67,11 @@ unique(dyn_results$algorithm)
 by_instance <- dyn_results %>% group_by(instance)
 by_algorithm <- dyn_results %>% group_by(algorithm)
 by_inst_alg <- dyn_results %>% 
-  group_by(instance, algorithm) %>% 
-  summarize_all(mean) %>%
+  group_by(instance, algorithm, reducer) %>% 
+  summarize_all(mean, na.rm=TRUE) %>%
   select(-rep)
-print(by_inst_alg)
+buchberger <- by_inst_alg %>% filter(reducer == 'classical')
+f4 <- by_inst_alg %>% filter(reducer == 'F4')
 ```
 
 # Partial results from some previous works
@@ -74,75 +80,162 @@ The following table shows the results reported in [@Caboara2014]. Timings are no
 We cannot reproduce these results, even using the code supplied in the original paper. 
 
 ```{r}
-caboara_perry <- read.table("caboara-perry2014.out", header = TRUE)
-knitr::kable(
-  caboara_perry,
-  caption='Results from Caboara and Perry, 2014'
-)
+caboara_perry <- read.table("data/caboara-perry2014.out", header = TRUE)
+
+repr_cp <- by_inst_alg %>%
+  filter(algorithm=='caboara-perry', reducer=='classical') %>%
+  ungroup %>%
+  select(instance, polynomials, monomials) %>%
+  filter(instance %in% caboara_perry$instance)
+
+how_reproducible <- inner_join(caboara_perry, repr_cp, by="instance") %>%
+  rename(
+    "Original polynomials" = polynomials.x,
+    "Original monomials" = monomials.x,
+    "Our polynomials" = polynomials.y,
+    "Our monomials" = monomials.y
+  )
+
+print(how_reproducible)
 ```
+
+There are multiple possibilities for why we could not reproduce the results of the original paper. One is that their
+code may have changed between the publication of the paper and our access. As they did not provide the instances,
+only their names (they are all classical benchmarks in the literature) there may be slight differences in the
+instances themselves. An instance is a list of polynomials - they may have been provided in a different order,
+leading to different results. Also, one of the properties of the instances (characteristic) was not reported in
+the paper, so we had to choose an arbitrary value common in the literature.
 
 For completeness, we also show the results from [@Perry2017], that uses a slightly modified version of the 
 caboara-perry algorithm and a simple implementation in C++.
 
 ```{r}
-perry <- read.table("perry2017.out", header = TRUE)
-knitr::kable(
-  perry,
-  caption="Results from Perry, 2017"
-)
-knitr::kable(
-  by_inst_alg %>% filter(algorithm == "caboara-perry", grepl("cyclicn", instance)) %>%
-    select(instance, polynomials, monomials, time),
-  caption="Current caboara-Perry results for cyclic instances"
-)
+perry <- read.table("data/perry2017.out", header = TRUE)
+comp_cp <- by_inst_alg %>%
+  filter(algorithm=='caboara-perry', reducer=='classical') %>%
+  ungroup %>%
+  select(instance, polynomials, monomials, time) %>%
+  filter(instance %in% perry$instance)
+inner_join(perry, comp_cp, by="instance") %>%
+  rename(
+    "Their polynomials" = polynomials.x,
+    "Their monomials" = monomials.x,
+    "Their time" = time.x,
+    "Our polynomials" = polynomials.y,
+    "Our monomials" = monomials.y,
+    "Our time" = time.y
+  )
 ```
 
+Our implementation is much slower, but that is expected, as the implementation from [@Perry2017] is in C++ and ours
+is in Sage / Python. It is interesting to note, however, that for most instances their implementation is faster by almost a factor of 10. This is not the case of cyclicnh7, where it is only about 2 times faster. This points to an algorithmic advantage of the caboara-perry algorithm in this case.
+
 # Exploratory analysis
+
+```{r, include=FALSE}
+#We drop zeroes in the geometric mean, it is important in some cases with overhead 0
+gmean <- function(x, na.rm=FALSE) {
+  exp(mean(log(x[which(x != 0)]), na.rm=na.rm))
+}
+```
+
+## Classical reduction vs F4
+
+Two reducers (a component of the general Gröbner Basis algorithm) were implemented: classical (based on polynomial 
+arithmetic) and F4 (introduced in [@faugereF4], uses matrix row reduction). F4 is usually considered to be faster
+in the context of traditional static Gröbner Basis algorithms. We observe this as well in our implementation, as shown by the table below (geometric means over all instances of the Static algorithm).
+
+```{r}
+by_inst_alg %>%
+  filter(algorithm=='static') %>%
+  group_by(reducer) %>%
+  summarize(time=gmean(time, na.rm=TRUE))
+```
+
+Is the speedup of using the F4 reducer kept for dynamic algorithms? In average, yes.
+
+```{r}
+print("Classical reducer running time (over all algorithms): ")
+gmean(buchberger$time, na.rm=TRUE)
+print("F4 reducer running time (over all algorithms):")
+gmean(f4$time, na.rm=TRUE)
+```
+
+The speedup of the F4 reducer is kept for most, but not all, pairs of instances and algorithms. The following graphs show results instance by instance, for three algorithms (Caboara-Perry, Static, Perturbation).
+
+```{r}
+cp <- by_inst_alg %>% filter(algorithm == 'caboara-perry')
+static <- by_inst_alg %>% filter(algorithm == 'static')
+perturb <- by_inst_alg %>% filter(algorithm == 'perturbation')
+
+ggplot(cp, aes(x=instance, y=1 + time, fill=reducer)) + 
+  geom_col(position='dodge') + 
+  coord_flip() + 
+  scale_y_log10() +
+  ggtitle("Caboara-Perry algorithm")
+
+ggplot(static, aes(x=instance, y=1 + time, fill=reducer)) + 
+  geom_col(position='dodge') + 
+  coord_flip() + 
+  scale_y_log10() +
+  ggtitle("Static algorithm")
+
+ggplot(perturb, aes(x=instance, y=1 + time, fill=reducer)) + 
+  geom_col(position='dodge') + 
+  coord_flip() + 
+  scale_y_log10() +
+  ggtitle("Perturbation algorithm")
+```
+
 
 First, we want to visualize the running time of the algorithms per instance, comparatively, and to find the algorithm that runs the fastest for each instance.
 
 ```{r}
-ggplot(by_inst_alg, aes(x=instance, y=time, fill=algorithm)) + 
-  geom_col(position='dodge') + 
-  coord_flip()
-
-knitr::kable(
-  by_inst_alg %>% 
-    filter(rank(time) == 1) %>% 
-    select(instance, algorithm),
-  caption = "Fastest algorithm per instance"
-)
-
-knitr::kable(
-  by_inst_alg %>% 
-    filter(rank(desc(time)) == 1) %>% 
-    select(instance, algorithm),
-  caption = "Slowest algorithm per instance"
-)
+by_inst_alg %>% 
+  group_by(algorithm, reducer) %>%
+  summarize(
+    timeout=sum(is.na(time)),
+    time=gmean(time, na.rm=TRUE),
+    overhead=gmean(dynamic, na.rm=TRUE),
+    polynomials=gmean(polynomials, na.rm=TRUE),
+    monomials=gmean(monomials, na.rm=TRUE),
+    degree=gmean(degree, na.rm=TRUE),
+    sreductions=gmean(sreductions, na.rm=TRUE)
+  ) %>%
+  select(
+    algorithm, reducer, time, overhead, polynomials, 
+    monomials, degree, sreductions,timeout
+  )
 ```
 
-We observe that static is the fastest algorithm on most instances, and caboara-perry is slowest on most. These instances are pretty biased towards static, though, as they are small enough so that the dynamic overhead makes a big difference.
+
+
+```{r}
+ggplot(data=by_inst_alg, aes(x=polynomials, y=time, color=algorithm)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  xlab("log(Polynomials)") +
+  ylab("log(Time)") +
+  guides(color=guide_legend("Algorithm")) +
+  theme(legend.position=c(0.87, 0.23))
+
+ggplot(data=by_inst_alg, aes(x=degree, y=time, color=algorithm)) +
+  geom_point() +
+  scale_y_log10() +
+  scale_x_log10() +
+  xlab("log(Degree)") +
+  ylab("log(Time)") +
+  guides(color=guide_legend("Algorithm")) +
+  theme(legend.position=c(0.87, 0.23))
+```
 
 Now, we compare the sizes of the output bases, in number of polynomials.
 
 ```{r}
-ggplot(by_inst_alg, aes(x=instance, y=polynomials, fill=algorithm)) + 
+ggplot(buchberger, aes(x=instance, y=polynomials, fill=algorithm)) + 
   geom_col(position='dodge') + 
   coord_flip()
-#Smallest basis
-knitr::kable(
-  by_inst_alg %>% 
-   filter(rank(time) == 1) %>% 
-    select(instance, algorithm),
-  caption="Algorithm with smallest basis for each instance"
-)
-#Largest basis
-knitr::kable(
-  by_inst_alg %>% 
-    filter(rank(desc(time)) == 1) %>% 
-    select(instance, algorithm),
-  caption="Algorithm with largest basis for each instance"
-)
 ```
 
 Here, the dynamic algorithms (perturbation and caboara-perry) get better results than static for larger instances, such as cyclicn6 and cyclicnh6. All algorithms tie or are close to tying for the katsura family. It can be shown that the affine Katsura instance with parameter $n$ has a Gröbner Basis with $n$ polynomials. All algorithms are far from this lower bound, which means the dynamic algorithms should be improved to deal with this kind of situation better.
@@ -150,23 +243,9 @@ Here, the dynamic algorithms (perturbation and caboara-perry) get better results
 We should also check what happens to the degrees.
 
 ```{r}
-ggplot(by_inst_alg, aes(x=instance, y=degree, fill=algorithm)) +
+ggplot(buchberger, aes(x=instance, y=degree, fill=algorithm)) +
   geom_col(position='dodge') + 
   coord_flip()
-#Smallest degree
-knitr::kable(
-  by_inst_alg %>% 
-    filter(rank(time) == 1) %>% 
-    select(instance, algorithm),
-  caption="Algorithm with smallest degree for each instance"
-)
-#Largest degree
-knitr::kable(
-  by_inst_alg %>% 
-    filter(rank(desc(time)) == 1) %>% 
-    select(instance, algorithm),
-  caption="Algorithm with largest degree for each instance"
-)
 ```
 
 Algorithms tie in terms of degree for most Katsuras. For the cyclics, perturbation seems to perform well, specially for the larger ones.
@@ -174,32 +253,32 @@ Algorithms tie in terms of degree for most Katsuras. For the cyclics, perturbati
 Quick idea: can we show that getting smaller bases rises the degree? (the graphic below looks awful, but I think it shows that the answer is yes for some instances, no to others).
 
 ```{r}
-ggplot(by_inst_alg, aes(x=polynomials, y=degree, color=instance)) +
+ggplot(buchberger, aes(x=polynomials, y=degree, color=instance)) +
   geom_line()
 ```
 
 Check correlation between number of S-reductions and time.
 
 ```{r}
-ggplot(by_inst_alg, aes(x=sreductions, y=time, color=algorithm)) +
+ggplot(buchberger, aes(x=sreductions, y=time, color=algorithm)) +
   geom_point() + 
   scale_x_log10() + 
   scale_y_log10()
 ```
 
 There is clearly a positive correlation (graphically) and computing it we get
-`r cor(by_inst_alg$sreductions, by_inst_alg$time)`.
+`r cor(buchberger$sreductions, buchberger$time)`.
 
 We should also test:
 
-- polynomials and time: `r cor(by_inst_alg$polynomials, by_inst_alg$time)`
-- monomials and time: `r cor(by_inst_alg$monomials, by_inst_alg$time)`
-- degree and time: `r cor(by_inst_alg$degree, by_inst_alg$time)`
+- polynomials and time: `r cor(buchberger$polynomials, buchberger$time)`
+- monomials and time: `r cor(buchberger$monomials, buchberger$time)`
+- degree and time: `r cor(buchberger$degree, buchberger$time)`
 
 The first two are aroung $0.5$, degree is $0.81$. Graphing degree, we get:
 
 ```{r}
-ggplot(by_inst_alg, aes(x=degree, y=time, color=algorithm)) +
+ggplot(buchberger, aes(x=degree, y=time, color=algorithm)) +
   geom_point() + 
   scale_x_log10() + 
   scale_y_log10()
@@ -208,9 +287,225 @@ ggplot(by_inst_alg, aes(x=degree, y=time, color=algorithm)) +
 I should also measure fraction of time taken managing the queue, unrestricted vs restricted algorithms.
 
 ```{r}
-ggplot(by_inst_alg, aes(x=instance, y=queue / time, fill=algorithm)) +
+ggplot(buchberger, aes(x=instance, y=queue / time, fill=algorithm)) +
   geom_col(position='dodge') + 
   coord_flip()
 ```
 
-# Comparison between our implementation and Sage / Singular
+
+
+#Generating some tables for the paper
+
+```{r}
+library(xtable)
+paper_format <- function (table, alg, caption) {
+  t <-table %>%
+    filter(algorithm == alg) %>%
+    ungroup() %>%
+    select(-algorithm,-reducer,-queue,-heuristic,-reduction,-zeroreductions) %>%
+    mutate(
+      polynomials = as.integer(polynomials),
+      monomials = as.integer(monomials),
+      degree = as.integer(degree),
+      sreductions = as.integer(sreductions)
+    ) %>%
+    rename(
+      "$t$" = time,
+      "$O$" = dynamic,
+      "$|G|$" = polynomials,
+      "$|\\Supp(G)|$" = monomials,
+      "$\\deg$" = degree,
+      "sred" = sreductions
+    )
+  print(xtable(t,caption=caption), 
+        include.rownames=F, 
+        sanitize.text.function=function(x){x},
+        NA.string = "NA")
+}
+```
+
+```{r}
+algorithms <- unique(by_inst_alg$algorithm)
+for (alg in algorithms) {
+  cap1 <- paste("Experimental results for ", alg, " using Buchberger reducer")
+  cap2 <- paste("Experimental results for ", alg, " using F4 reducer")
+  paper_format(buchberger, alg, cap1)
+  paper_format(f4, alg, cap2)
+}
+```
+
+# Checking out Random results
+
+Every instance / reducer has been run at least 2 times.
+
+```{r}
+random <- read.table("data/tiamat0-random.out", header=T)
+random %>%
+  group_by(reducer, instance) %>%
+  summarize(n = n())
+```
+
+#Checking out GS and GFans
+
+```{r}
+
+
+gs <- read.table("data/tiamat0-gs.out", header=T)
+gs <- gs %>%
+  filter(!is.na(time)) %>%
+  select(-rep)
+
+instances <- unique(gs$instance)
+#Make a table with the relevant GFan data: min size, min deg, maybe size of the Pareto curve?
+rows <- lapply(instances, function(instance_name) {
+  gfan <- read.table(paste0("./data/", instance_name, ".gf"), header=T)
+  minpolys <- min(gfan$polynomials)
+  mindeg <- min(gfan$degree)
+  return(tibble(instance=instance_name, minG=minpolys, mindeg=mindeg))
+})
+df <- bind_rows(rows)
+print(df)
+gs <- full_join(gs, df, by="instance")
+
+cap1 <- "Experimental results for GS using Buchberger reducer"
+paper_format(gs, "gritzmann-sturmfels", cap1)
+```
+
+# Behavior in cyclics / homogeneous cyclics
+
+```{r}
+cyclics <- by_inst_alg %>%
+  filter(grepl("cyclicn", instance) & !grepl("h", instance)) %>%
+  filter(reducer == "classical")
+
+ggplot(cyclics, aes(x=instance, y=time, color=algorithm, group=algorithm)) + 
+  geom_line() + 
+  scale_y_log10()
+
+ggplot(cyclics, aes(x=instance, y=polynomials, color=algorithm, group=algorithm)) + 
+  geom_line()
+
+cyclicsh <- by_inst_alg %>%
+  filter(grepl("cyclicnh", instance)) %>%
+  filter(reducer == "classical")
+
+ggplot(cyclicsh, aes(x=instance, y=time, color=algorithm, group=algorithm)) + 
+  geom_line() + 
+  scale_y_log10() + 
+  ylab("log(time)")
+
+ggplot(cyclicsh, aes(x=instance, y=polynomials, color=algorithm, group=algorithm)) + 
+  geom_line()
+
+cyclics <- by_inst_alg %>%
+  filter(grepl("cyclicn", instance) & !grepl("h", instance)) %>%
+  filter(reducer == "F4")
+
+ggplot(cyclics, aes(x=instance, y=time, color=algorithm, group=algorithm)) + 
+  geom_line() + 
+  scale_y_log10()
+
+
+cyclicsh <- by_inst_alg %>%
+  filter(grepl("cyclicnh", instance)) %>%
+  filter(reducer == "F4")
+
+ggplot(cyclicsh, aes(x=instance, y=time, color=algorithm, group=algorithm)) + 
+  geom_line() +
+  scale_y_log10() +
+  ylab("log(time)")
+
+```
+
+# Generating data on Gröbner fans
+
+```{r}
+library(ggrepel)
+explore_gf <- function(instance_name) {
+  
+  data <- by_inst_alg %>%
+    filter(instance == instance_name, reducer == "classical")
+  
+  gf_data <- read.table(paste0("./data/", instance_name, ".gf"), header=T)
+  ggplot() +
+    geom_count(data=gf_data, aes(x=polynomials, y=degree)) + 
+    geom_point(data=data, aes(x=polynomials, y=degree, color=algorithm), size=3, show.legend=FALSE) +
+    ggtitle(instance_name) +
+    geom_text_repel(data=data, aes(x=polynomials, y=degree, color=algorithm, label=algorithm), show.legend=FALSE) + 
+    scale_alpha(guide = 'none')
+}
+
+explore_gf("cyclicn4")
+explore_gf("cyclicnh4")
+explore_gf("cyclicn5")
+explore_gf("katsuran4")
+explore_gf("katsuranh4")
+explore_gf("econ4")
+explore_gf("econh4")
+explore_gf("econ5")
+explore_gf("r4")
+explore_gf("r4h")
+```
+
+
+
+```{r}
+for (instance_name in unique(by_inst_alg$instance)) {
+  data <- by_inst_alg %>%
+    filter(instance == instance_name, reducer == "classical")
+ 
+  g <- ggplot(data=data, aes(x=polynomials, y=degree, color=algorithm)) +
+    geom_jitter() + 
+    ggtitle(instance_name)
+  
+  plot(g)
+}
+```
+
+I noticed perturbation and random are measuring overhead 0 when the reducer is F4. Why? Is it a problem in the measurement or in the R code?
+
+```{r}
+by_inst_alg %>%
+  filter(algorithm == 'random' | algorithm == 'perturbation', reducer == 'F4') %>%
+  select(dynamic)
+```
+
+The problem is that in a few cases, the overhead is 0. Then, the geometric mean is 0. I can just drop zeroes from the
+gmean computation.
+
+```{r}
+c67h <- by_inst_alg %>%
+  filter(instance == 'cyclicnh7' | instance == 'cyclicnh6') %>%
+  select(instance, algorithm, reducer, time, dynamic, polynomials, monomials, degree, sreductions) %>%
+  ungroup()
+
+c8h_random <- read.table("data/tiamat0-random-c8h.out", header=T)
+c8h_random <- c8h_random %>%
+  group_by(instance, algorithm, reducer) %>%
+  summarize_all(mean, na.rm=TRUE) %>%
+  select(instance, algorithm, reducer, time, dynamic, polynomials, monomials, degree, sreductions) %>%
+  ungroup()
+
+c8h <- read.table("data/tiamat0-cyclicnh8.out", header=T)
+c8h <- c8h %>%
+  filter(algorithm != "random") %>%
+  select(instance, algorithm, reducer, time, dynamic, polynomials, monomials, degree, sreductions)
+
+big_cyclics <- rbind(c67h, c8h, c8h_random)
+big_cyclics <- big_cyclics %>%
+    rename(
+      "Algorithm" = algorithm,
+      "Reducer" = reducer,
+      "$t$" = time,
+      "$O$" = dynamic,
+      "$|G|$" = polynomials,
+      "$|\\Supp(G)|$" = monomials,
+      "$\\deg$" = degree,
+      "sred" = sreductions
+    )
+cyclics_caption <- "Results for some homogeneous Cyclic ideals."
+print(xtable(big_cyclics,caption=cyclics_caption), 
+      include.rownames=F, 
+      sanitize.text.function=function(x){x},
+      NA.string = "NA")
+```

@@ -1,0 +1,7 @@
+instance reducer rep algorithm time dynamic heuristic queue reduction polynomials monomials degree sreductions zeroreductions
+cyclicnh8 F4 0 static 1950.10 0.00 0.00 26.69 1893.69 1182 676462 29 72296 7986
+cyclicnh8 classical 0 perturbation 1777.19 68.64 24.49 5.45 1699.85 455 415782 17 2220 1765
+cyclicnh8 F4 0 perturbation 1820.61 2.51 0.89 12.34 1777.79 455 415782 17 50872 4940
+cyclicnh8 classical 0 static 11114.02 0.00 0.00 38.16 11068.55 1182 676462 29 7026 5844
+cyclicnh8 classical 0 random 10611.99 131.89 18.20 20.12 10451.02 845 875882 22 4728 3822
+cyclicnh8 classical 0 caboara-perry 16730.38 14118.22 26.05 23.03 2584.53 538 486535 20 2710 2172

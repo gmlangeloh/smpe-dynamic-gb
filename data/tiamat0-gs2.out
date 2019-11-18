@@ -1,0 +1,13 @@
+instance reducer rep algorithm time dynamic heuristic queue reduction polynomials monomials degree sreductions zeroreductions
+cyclicn4 classical 0 gritzmann-sturmfels 1.16 1.04 0.81 0.01 0.01 5 21 5 17 9
+cyclicnh4 classical 0 gritzmann-sturmfels 2.06 1.93 1.47 0.01 0.01 4 17 4 14 6
+cyclicn5 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+katsuran4 classical 0 gritzmann-sturmfels 1.81 1.57 1.19 0.01 0.13 7 52 4 25 15
+katsuranh4 classical 0 gritzmann-sturmfels 5.67 5.60 3.99 0.01 0.03 7 49 4 30 18
+cyclicnh6 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+cyclicn6 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+cyclicnh5 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+katsuranh5 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+katsuran5 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+katsuranh6 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
+katsuran6 classical 0 gritzmann-sturmfels NA NA NA NA NA NA NA NA NA NA
