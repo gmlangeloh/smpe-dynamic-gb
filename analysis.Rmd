@@ -313,14 +313,20 @@ c8h <- c8h %>%
   filter(algorithm != "random") %>%
   select(instance, algorithm, reducer, time, dynamic, polynomials, monomials, degree, sreductions)
 
-big_cyclics <- rbind(c67h, c8h, c8h_random)
+big_cyclics <- rbind(c67h, c8h, c8h_random) %>%
+  filter(algorithm %in% c("static", "caboara-perry", "perturbation"))
 knitr::kable(
   big_cyclics,
   caption="Behavior of the algorithms on a few larger instances."
 )
 ```
 
-Note that, in this case, 
+Note that, for cyclicnh7, both Caboara-Perry and Perturbation are up to 4 times faster than the Static algorithm. In cyclicnh8, Perturbation is the fastest algorithm, returning fewer polynomials of lower degree than both Static and
+Caboara-Perry. By that point, the lower overhead of Perturbation in relation to
+Caboara-Perry starts to pay off, and its running time is much lower.
+
+This is additional evidence that Perturbation may scale better out of the implemented algorithms. It is not possible to test this further, with the current implementation, because even larger instances take days to run. For this reason,
+a more efficient implementation of the dynamic algorithms, based on state-of-the-art Gröbner bases open source implementations is needed.
 
 ## Relationships between variables 
 
@@ -380,9 +386,14 @@ is completely dominated by the dynamic overhead, which is mostly independent fro
 
 ## Exploring the search space and the GS algorithm
 
+The Gritzmann-Sturmfels algorithm (GS for short) is essentially a brute force
+on the search space, as it visits every available solution. It was proposed
+mostly as a theoretical tool with some interesting properties, and was not
+previously implemented. We implemented it, however, to check how close it is
+to optimality in the instances where it does not time out, as in these cases
+it is possible to compute the entire search space.
+
 ```{r}
-
-
 gs <- read.table("data/tiamat0-gs.out", header=T)
 gs <- gs %>%
   filter(!is.na(time)) %>%
@@ -397,11 +408,21 @@ rows <- lapply(instances, function(instance_name) {
   return(tibble(instance=instance_name, minG=minpolys, mindeg=mindeg))
 })
 df <- bind_rows(rows)
-print(df)
-gs <- full_join(gs, df, by="instance")
+gs <- full_join(gs, df, by="instance") %>% 
+  select(-reducer, -algorithm, -heuristic, -queue, -reduction, -zeroreductions)
+knitr::kable(
+  gs,
+  caption="GS algorithm results whenever it did not time out, compared to optimal
+  outputs. The columns minG and mindeg correspond to the minimal possible number of   polynomials and degree, respectively. These may not be attainable at the same      time."
+)
 ```
 
-# Generating data on Gröbner fans
+The GS algorithm was able to find optimal solutions in 4 out of 7 cases, and in 1 of the remaining cases it is not possible to optimize the number of polynomials and degree simultaneously.
+
+Below, we plot the search space of multiple small instances completely, along with
+the results of the algorithms whenever they are available. This is not
+the case for r4 and r4h, because they are random instances and not traditional
+literature benchmarks.
 
 ```{r}
 library(ggrepel)
@@ -430,3 +451,31 @@ explore_gf("econ5")
 explore_gf("r4")
 explore_gf("r4h")
 ```
+
+A simple interpretation of the quality of the output of the algorithms in these instances is that solutions closer to the bottom left are preferable. It is easy to observe that in many cases there is no solution minimizing both the degree and the
+number of polynomials at the same time. This means the problem of finding the
+"optimal" Gröbner Basis for an input is essentially a multi-objective optimization
+problem. At the time, it is not clear how to design algorithms that prioritize
+one over the other. 
+
+Regardless of the multi-objective characteristics of the problem, we can see that there is margin for improvement in many of these instances, even though they
+are small. Indeed, in many of them, there is an optimal solution and it is not found by any of the algorithms, or the solutions found are not in the Pareto curve of the instance (the Pareto curve of a multi-objective problem is the set of non-dominated solutions - a solution is dominated when some other solution is better than it with respect to every variable).
+
+This multi-objective aspect was not previously observed in the literature - in fact, no previous work measures the degree of the output of the dynamic algorithms.
+
+# Conclusions
+
+- Currently, dynamic algorithms are not able to compete with traditional static ones except for larger instances.
+- The new Perturbation algorithm is competitive with the previous best dynamic
+algorithm, the Caboara-Perry algorithm, and seems to scale better than it. A
+more efficient implementation is necessary to test this hypothesis more rigorously.
+- There is a high correlation between time and sreductions and between time and
+polynomials in the output. The correlation between time and degree is not nearly
+as high, and that is somewhat surprising, when taking the theory of Gröbner Bases
+into account.
+- There is a multi-objective aspect to dynamic Gröbner Basis algorithms, as one
+wants both outputs with low degree and small bases. We showed that often it is
+not possible to minimize both at the same time, and the current algorithms are
+not able to control what exactly they are minimizing.
+
+# Bibliography
